@@ -1057,4 +1057,291 @@ export class PocketPawClient {
   async dwRetryTask(projectId: string, taskId: string): Promise<Record<string, unknown>> {
     return this.dwRequest("POST", `/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/retry`);
   }
+
+
+// ---------------------------------------------------------------------------
+// Agents
+// ---------------------------------------------------------------------------
+
+async listAgents(): Promise<{ agents: any[]; count: number }> {
+    return this.get("/agents");
+}
+
+async getAgent(id: string): Promise<any> {
+    return this.get(`/agents/${encodeURIComponent(id)}`);
+}
+
+async createAgent(body: {
+    name: string;
+    role: string;
+    description?: string;
+    backend?: string;
+    model?: string;
+    system_prompt?: string;
+    tools?: string[];
+    enabled?: boolean;
+}): Promise<any> {
+    return this.post("/agents", body);
+}
+
+async updateAgent(id: string, body: any): Promise<any> {
+    return this.put(`/agents/${encodeURIComponent(id)}`, body);
+}
+
+async deleteAgent(id: string): Promise<void> {
+    await this.del(`/agents/${encodeURIComponent(id)}`);
+}
+
+// --- Agent Sessions ---
+
+async listAgentSessions(agentId: string): Promise<{ sessions: any[]; count: number }> {
+    return this.get(`/agents/${encodeURIComponent(agentId)}/sessions`);
+}
+
+async createAgentSession(agentId: string, userId?: string): Promise<any> {
+    const params = userId ? `?user_id=${encodeURIComponent(userId)}` : "";
+    return this.post(`/agents/${encodeURIComponent(agentId)}/sessions${params}`);
+}
+
+async getAgentSession(sessionId: string): Promise<any> {
+    return this.get(`/agents/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+async executeAgent(sessionId: string, content: string, media?: MediaAttachment[]): Promise<any> {
+    return this.post(`/agents/sessions/${encodeURIComponent(sessionId)}/execute`, {
+        message: content,
+        media,
+    });
+}
+
+async streamAgent(
+    sessionId: string,
+    content: string,
+    handlers: {
+        onChunk?: (chunk: any) => void;
+        onToolStart?: (data: any) => void;
+        onToolResult?: (data: any) => void;
+        onError?: (data: any) => void;
+        onEnd?: () => void;
+    },
+    media?: MediaAttachment[],
+    signal?: AbortSignal,
+): Promise<void> {
+    const url = `${this.apiBase}/agents/sessions/${encodeURIComponent(sessionId)}/stream`;
+    const body = { message: content, media };
+
+    const streamController = new AbortController();
+    if (signal) {
+        signal.addEventListener("abort", () => streamController.abort(), { once: true });
+    }
+
+    let res: Response;
+    try {
+        res = await fetch(url, {
+            method: "POST",
+            headers: this.headers(),
+            body: JSON.stringify(body),
+            signal: streamController.signal,
+        });
+    } catch (err) {
+        throw new ApiError(0, friendlyErrorMessage(err));
+    }
+
+    if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        throw new ApiError(res.status, detail);
+    }
+
+    const reader = res.body?.getReader();
+    if (!reader) {
+        throw new ApiError(0, "No readable stream");
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let currentEvent = "";
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+
+            for (const line of lines) {
+                if (line.startsWith("event: ")) {
+                    currentEvent = line.slice(7).trim();
+                } else if (line.startsWith("data: ")) {
+                    const data = line.slice(6);
+                    if (data === "[DONE]") {
+                        handlers.onEnd?.();
+                        return;
+                    }
+                    try {
+                        const parsed = JSON.parse(data);
+                        switch (currentEvent) {
+                            case "chunk":
+                                handlers.onChunk?.(parsed);
+                                break;
+                            case "tool_start":
+                                handlers.onToolStart?.(parsed);
+                                break;
+                            case "tool_result":
+                                handlers.onToolResult?.(parsed);
+                                break;
+                            case "error":
+                                handlers.onError?.(parsed);
+                                break;
+                        }
+                    } catch {
+                        // skip unparseable lines
+                    }
+                    currentEvent = "";
+                }
+            }
+        }
+    } finally {
+        reader.releaseLock();
+    }
+}
+
+async abortAgentSession(sessionId: string): Promise<any> {
+    return this.post(`/agents/sessions/${encodeURIComponent(sessionId)}/abort`);
+}
+
+// ---------------------------------------------------------------------------
+// Providers
+// ---------------------------------------------------------------------------
+
+async listProviders(enabled?: boolean): Promise<{ providers: any[]; count: number }> {
+    const params = enabled !== undefined ? `?enabled=${enabled}` : "";
+    return this.get(`/providers${params}`);
+}
+
+async getProvider(id: string): Promise<any> {
+    return this.get(`/providers/${encodeURIComponent(id)}`);
+}
+
+async createProvider(body: {
+    name: string;
+    base_url: string;
+    api_key?: string;
+    model: string;
+    enabled?: boolean;
+    timeout?: number;
+    max_retries?: number;
+}): Promise<any> {
+    return this.post("/providers", body);
+}
+
+async updateProvider(id: string, body: any): Promise<any> {
+    return this.put(`/providers/${encodeURIComponent(id)}`, body);
+}
+
+async deleteProvider(id: string): Promise<void> {
+    await this.del(`/providers/${encodeURIComponent(id)}`);
+}
+
+// --- Provider Chat ---
+
+async providerChat(providerId: string, request: {
+    model?: string;
+    messages: { role: string; content: string }[];
+    temperature?: number;
+    max_tokens?: number;
+}): Promise<any> {
+    return this.post(`/providers/${encodeURIComponent(providerId)}/chat`, request);
+}
+
+async providerChatStream(
+    providerId: string,
+    request: {
+        model?: string;
+        messages: { role: string; content: string }[];
+        temperature?: number;
+        max_tokens?: number;
+    },
+    handlers: {
+        onChunk?: (chunk: any) => void;
+        onError?: (error: any) => void;
+        onEnd?: () => void;
+    },
+    signal?: AbortSignal,
+): Promise<void> {
+    const url = `${this.apiBase}/providers/${encodeURIComponent(providerId)}/chat/stream`;
+
+    const streamController = new AbortController();
+    if (signal) {
+        signal.addEventListener("abort", () => streamController.abort(), { once: true });
+    }
+
+    let res: Response;
+    try {
+        res = await fetch(url, {
+            method: "POST",
+            headers: this.headers(),
+            body: JSON.stringify(request),
+            signal: streamController.signal,
+        });
+    } catch (err) {
+        throw new ApiError(0, friendlyErrorMessage(err));
+    }
+
+    if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        throw new ApiError(res.status, detail);
+    }
+
+    const reader = res.body?.getReader();
+    if (!reader) {
+        throw new ApiError(0, "No readable stream");
+        return;
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+
+            for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                    const data = line.slice(6);
+                    if (data === "[DONE]") {
+                        handlers.onEnd?.();
+                        return;
+                    }
+                    try {
+                        const chunk = JSON.parse(data);
+                        handlers.onChunk?.(chunk);
+                    } catch {
+                        // skip unparseable lines
+                    }
+                }
+            }
+        }
+    } finally {
+        reader.releaseLock();
+    }
+}
+
+async providerEmbeddings(providerId: string, request: {
+    model?: string;
+    input: string[];
+}): Promise<any> {
+    return this.post(`/providers/${encodeURIComponent(providerId)}/embeddings`, request);
+}
+
+async listProviderModels(providerId: string): Promise<{ models: any[]; count: number }> {
+    return this.get(`/providers/${encodeURIComponent(providerId)}/models`);
+}
+
 }
