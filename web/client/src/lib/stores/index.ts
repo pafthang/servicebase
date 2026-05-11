@@ -16,6 +16,13 @@ export * from './connection.svelte';
 // New stores
 export * from './agents.svelte';
 export * from './providers.svelte';
-export function initializeStores() {
-  // compatibility no-op
+
+import { connectionStore } from './connection.svelte';
+
+export async function initializeStores(
+  token: string,
+  baseUrl?: string,
+  wsToken?: string,
+) {
+  await connectionStore.initialize(token, baseUrl, wsToken);
 }
