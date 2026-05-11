@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { BrainCircuit, Fingerprint, HeartPulse, Plug, Wand, Activity, Settings, Gauge } from "@lucide/svelte";
+  import { BrainCircuit, Fingerprint, HeartPulse, Plug, Wand, Activity, Settings, Gauge, Database } from "@lucide/svelte";
   import type { Component } from "svelte";
   import { page } from "$app/state";
   import { platformStore, connectionStore } from "$lib/stores";
 
   const tools: { href: string; label: string; icon: Component<any>; needsBackend?: boolean }[] = [
+    { href: "/collections", label: "Collections", icon: Database, needsBackend: true },
     { href: "/memory", label: "Memory", icon: BrainCircuit, needsBackend: true },
     { href: "/identity", label: "Identity", icon: Fingerprint, needsBackend: true },
     { href: "/explore", label: "Skills", icon: Wand, needsBackend: true },
@@ -40,7 +41,7 @@
   <div class="grid grid-cols-3 gap-1">
     {#each tools as tool (tool.href)}
       {@const Icon = tool.icon}
-      {@const isActive = pathname === tool.href}
+      {@const isActive = pathname === tool.href || pathname.startsWith(`${tool.href}/`)}
       {@const disabled = !isConnected && tool.needsBackend}
       {#if disabled}
         <span

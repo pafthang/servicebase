@@ -14,6 +14,7 @@ import (
 	"github.com/pafthang/servicebase/core"
 	backupapis "github.com/pafthang/servicebase/services/backup/apis"
 	collectioncache "github.com/pafthang/servicebase/services/cache"
+	collectionapis "github.com/pafthang/servicebase/services/collection/apis"
 	collectionmodels "github.com/pafthang/servicebase/services/collection/models"
 	cronapis "github.com/pafthang/servicebase/services/cron/apis"
 	fileapis "github.com/pafthang/servicebase/services/file/apis"
@@ -39,7 +40,6 @@ const (
 	fieldsQueryParam          string = "fields"
 )
 
-// InitRouter creates the Echo router and binds service-owned APIs.
 func InitRouter(app core.App, services *Services) (*echo.Echo, error) {
 	e := echo.New()
 	e.Debug = false
@@ -80,7 +80,6 @@ func InitRouter(app core.App, services *Services) (*echo.Echo, error) {
 	return e, nil
 }
 
-// RegisterRoutes binds migrated service APIs.
 func RegisterRoutes(app core.App, router *echo.Echo, api *echo.Group, services *Services) {
 	if services == nil {
 		return
@@ -88,11 +87,18 @@ func RegisterRoutes(app core.App, router *echo.Echo, api *echo.Group, services *
 
 	commonBadRequest := func(message string, rawErr any) error { return NewBadRequestError(message, rawErr) }
 	commonForbidden := func(message string, rawErr any) error { return NewForbiddenError(message, rawErr) }
+	commonNotFound := func(message string, rawErr any) error { return NewNotFoundError(message, rawErr) }
 	backupapis.Bind(app, api, backupapis.BindDeps{
 		ActivityLogger:         ActivityLogger,
 		RequireAdminTeamAccess: RequireAdminTeamAccess,
 		NewBadRequestError:     commonBadRequest,
 		NewForbiddenError:      commonForbidden,
+	})
+	collectionapis.Bind(app, api, collectionapis.BindDeps{
+		ActivityLogger:         ActivityLogger,
+		RequireAdminTeamAccess: RequireAdminTeamAccess,
+		NewBadRequestError:     commonBadRequest,
+		NewNotFoundError:       commonNotFound,
 	})
 	healthapis.Bind(app, api)
 	settingsapis.Bind(app, api, settingsapis.BindDeps{
@@ -210,7 +216,6 @@ func LoadFixedCollectionContext(app core.App, collectionName string, collectionT
 	}
 }
 
-// LoadAuthContext loads auth record context from the Authorization header.
 func LoadAuthContext(app core.App) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {

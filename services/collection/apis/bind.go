@@ -1,9 +1,12 @@
 package apis
 
 import (
+	"math"
 	"net/http"
+	"strconv"
 
 	collectionmodels "github.com/pafthang/servicebase/services/collection/models"
+	recordmodels "github.com/pafthang/servicebase/services/record/models"
 
 	"github.com/labstack/echo/v5"
 	"github.com/pafthang/servicebase/core"
@@ -34,6 +37,7 @@ func Bind(app core.App, rg *echo.Group, deps BindDeps) {
 	subGroup.GET("", api.list)
 	subGroup.POST("", api.create)
 	subGroup.GET("/:collection", api.view)
+	subGroup.GET("/:collection/records", api.records)
 	subGroup.PATCH("/:collection", api.update)
 	subGroup.DELETE("/:collection", api.delete)
 	subGroup.PUT("/import", api.bulkImport)
@@ -43,6 +47,14 @@ type collectionAPI struct {
 	app     core.App
 	service *collectionservice.Service
 	deps    BindDeps
+}
+
+type recordsResponse struct {
+	Page       int                    `json:"page"`
+	PerPage    int                    `json:"perPage"`
+	TotalItems int                    `json:"totalItems"`
+	TotalPages int                    `json:"totalPages"`
+	Items      []*recordmodels.Record `json:"items"`
 }
 
 func (api *collectionAPI) list(c echo.Context) error {
@@ -81,6 +93,51 @@ func (api *collectionAPI) view(c echo.Context) error {
 		}
 
 		return e.HttpContext.JSON(http.StatusOK, e.Collection)
+	})
+}
+
+func (api *collectionAPI) records(c echo.Context) error {
+	collection, err := api.service.FindByNameOrID(c.PathParam("collection"))
+	if err != nil || collection == nil {
+		return api.deps.NewNotFoundError("", err)
+	}
+
+	page := positiveInt(c.QueryParam("page"), 1)
+	perPage := positiveInt(c.QueryParam("perPage"), 50)
+	if perPage > 200 {
+		perPage = 200
+	}
+	offset := (page - 1) * perPage
+
+	var totalItems int
+	if err := api.app.Dao().RecordQuery(collection).Select("count(*)").Row(&totalItems); err != nil {
+		return api.deps.NewBadRequestError("Failed to count collection records.", err)
+	}
+
+	items := []*recordmodels.Record{}
+	query := api.app.Dao().RecordQuery(collection).
+		Limit(int64(perPage)).
+		Offset(int64(offset))
+
+	if !collection.IsView() {
+		query.OrderBy(collection.Name + ".created DESC")
+	}
+
+	if err := query.All(&items); err != nil {
+		return api.deps.NewBadRequestError("Failed to list collection records.", err)
+	}
+
+	totalPages := 1
+	if totalItems > 0 {
+		totalPages = int(math.Ceil(float64(totalItems) / float64(perPage)))
+	}
+
+	return c.JSON(http.StatusOK, recordsResponse{
+		Page:       page,
+		PerPage:    perPage,
+		TotalItems: totalItems,
+		TotalPages: totalPages,
+		Items:      items,
 	})
 }
 
@@ -206,4 +263,17 @@ func (api *collectionAPI) bulkImport(c echo.Context) error {
 			})
 		}
 	})
+}
+
+func positiveInt(raw string, fallback int) int {
+	if raw == "" {
+		return fallback
+	}
+
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+
+	return value
 }
